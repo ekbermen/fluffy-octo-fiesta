@@ -1,0 +1,459 @@
+# QR Güvenli: tek dosyayla gerçek APK derleyen GitHub Actions workflow'u
+# Konum: .github/workflows/build-apk.yml
+# Opsiyonel: repo köküne icon.png (512x512) koyarsan uygulama ikonu o olur.
+# APK: Actions > son çalışma > Artifacts, ya da Releases sayfasından indir.
+name: QR Güvenli APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Android SDK paketleri
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SM="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SM" ] || SM="$(command -v sdkmanager)"
+          yes | "$SM" --licenses > /dev/null || true
+          "$SM" "platforms;android-33" "build-tools;34.0.0" > /dev/null || true
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+      - name: Cordova projesi oluştur
+        run: |
+          npm install -g cordova@12.0.0
+          cordova create app com.jjj.qrguvenli "QR Güvenli"
+          rm -rf app/www/*
+          mkdir -p app/www/css app/www/js app/www/img app/res
+
+      - name: Uygulama dosyalarını yaz
+        run: |
+          cat > app/www/index.html <<'EOF_0'
+          <!DOCTYPE html>
+          <html lang="tr"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+          <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src https:; connect-src 'self'">
+          <title>QR Güvenli</title><link rel="stylesheet" href="css/style.css"></head>
+          <body>
+          <header><img src="img/icon.png" alt=""><h1>QR Güvenli</h1></header>
+          <main>
+          <section id="p1">
+          <label>Tür</label>
+          <select id="type"><option value="text">Metin / Link</option><option value="wifi">Wi-Fi</option><option value="mail">E-posta</option><option value="tel">Telefon</option><option value="sms">SMS</option><option value="wa">WhatsApp</option><option value="geo">Konum</option><option value="vcard">Kartvizit (vCard)</option></select>
+          <div id="fields"></div>
+          <label class="ck"><input type="checkbox" id="batch"> Toplu üret (Metin türünde her satır ayrı kod)</label>
+          <label>Format</label>
+          <select id="fmt"><option value="qr">QR Kod</option><option value="ean">Barkod EAN-13</option><option value="ean8">Barkod EAN-8</option><option value="upc">Barkod UPC-A</option><option value="c39">Barkod Code 39</option><option value="c128">Barkod Code 128</option></select>
+          <details id="sty"><summary>🎨 Tasarım (renk, şekil, logo)</summary>
+          <label>Hazır temalar</label><div class="chips" id="pre"></div>
+          <div class="g2"><div><label>Renk</label><input type="color" id="fg" value="#000000"></div><div><label>2. renk (degrade)</label><input type="color" id="fg2" value="#7c4dff"></div>
+          <div><label>Köşe renk</label><input type="color" id="ec" value="#000000"></div><div><label>Zemin</label><input type="color" id="bg" value="#ffffff"></div></div>
+          <label class="ck"><input type="checkbox" id="grad"> Degrade kullan</label>
+          <div class="g2"><div><label>Nokta şekli</label><select id="shape"><option value="0">Kare</option><option value="1">Yuvarlak nokta</option><option value="2">Yumuşak kare</option><option value="3">Elmas</option></select></div>
+          <div><label>Köşe şekli</label><select id="eye"><option value="0">Kare</option><option value="1">Yumuşak</option><option value="2">Daire</option></select></div></div>
+          <label>Hata düzeltme</label><select id="ecl"><option value="a">Otomatik</option><option value="0">Düşük (L)</option><option value="1">Orta (M)</option><option value="2">Yüksek (Q)</option><option value="3">En yüksek (H)</option></select>
+          <label>Ortaya logo</label><input type="file" id="logo" accept="image/*">
+          <label>Logo boyutu: <span id="lsv">20</span>%</label><input type="range" id="ls" min="10" max="26" value="20">
+          <button id="nologo" class="sm">Logoyu kaldır</button>
+          <label>Alt yazı</label><input id="cap" maxlength="30" placeholder="Örn: Beni tara">
+          </details>
+          <button id="gen" class="big">Oluştur</button>
+          <p id="err" class="err"></p>
+          <div class="card" id="out" hidden><canvas id="cv"></canvas>
+          <div class="row"><button id="sh">Paylaş / Kaydet</button><button id="sv">★ Kaydet</button></div></div>
+          <div id="bt"></div>
+          </section>
+          <section id="p2" hidden>
+          <video id="vid" playsinline muted></video>
+          <div class="row"><button id="cam" class="big">Kamerayı aç</button><button id="tor" hidden>🔦</button></div>
+          <input type="range" id="zm" hidden>
+          <label class="file">Galeriden oku<input type="file" id="img" accept="image/*"></label>
+          <p id="serr" class="err"></p>
+          <div class="card" id="res" hidden><div class="tag" id="rk"></div><div id="rbody"></div><div id="rrisk"></div><div class="row wrap" id="acts"></div><div id="pv"></div></div>
+          </section>
+          <section id="p3" hidden>
+          <input id="q" placeholder="Ara...">
+          <div class="chips" id="chips"></div>
+          <div id="lst"></div>
+          <div class="row"><button id="exp">Dışa aktar</button></div>
+          </section>
+          <section id="p4" hidden>
+          <label class="ck"><input type="checkbox" id="s_wifi"> Wi-Fi QR okununca otomatik bağlan</label>
+          <label class="ck"><input type="checkbox" id="s_save"> Okunanları klasörlere otomatik kaydet</label>
+          <label class="ck"><input type="checkbox" id="s_prev"> Linkleri otomatik ön izle (siteye istek atar)</label>
+          <label class="ck"><input type="checkbox" id="s_beep"> Okununca bip sesi</label>
+          <label class="ck"><input type="checkbox" id="s_vib"> Okununca titreşim</label>
+          <label class="ck"><input type="checkbox" id="s_light"> Açık tema</label>
+          <label>Güvendiğim siteler (her satıra bir alan adı)</label>
+          <textarea id="s_trust" rows="4" placeholder="example.com"></textarea>
+          <button id="s_clr" class="big bad">Tüm verileri sil</button>
+          <p class="mu">QR Güvenli v1.1: okunan hiçbir site otomatik açılmaz.</p>
+          </section>
+          </main>
+          <nav><button id="t1" class="on">➕<span>Oluştur</span></button><button id="t2">📷<span>Tara</span></button><button id="t3">📁<span>Klasör</span></button><button id="t4">⚙️<span>Ayar</span></button></nav>
+          <div id="toast"></div>
+          <script src="cordova.js"></script><script src="js/qr.js"></script><script src="js/barcode.js"></script><script src="js/jsQR.js"></script><script src="js/app.js"></script>
+          </body></html>
+
+          EOF_0
+          cat > app/www/css/style.css <<'EOF_1'
+          :root{--bg:#12101c;--cd:#1b172b;--in:#221e35;--tx:#eee;--mu:#9a96b5;--ac:#7c4dff;--bd:#352f52}
+          body.light{--bg:#f4f1ff;--cd:#fff;--in:#ece7ff;--tx:#1a1033;--mu:#6b6590;--bd:#d6cdf7}
+          *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+          body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,sans-serif;padding:env(safe-area-inset-top) 0 calc(70px + env(safe-area-inset-bottom))}
+          header{display:flex;align-items:center;gap:10px;padding:14px 16px}header img{width:34px;border-radius:8px}h1{font-size:20px;margin:0}
+          main{padding:0 16px 16px}label{display:block;margin:12px 0 6px;color:var(--mu);font-size:13px}
+          .ck{display:flex;gap:10px;align-items:center;color:var(--tx);font-size:14px}.ck input{width:20px;height:20px;margin:0}
+          input,select,textarea{width:100%;padding:12px;border-radius:12px;border:1px solid var(--bd);background:var(--in);color:var(--tx);font-size:15px;margin-bottom:4px}
+          input[type=color]{height:44px;padding:3px}input[type=range]{padding:0}
+          button{padding:12px 14px;border:0;border-radius:12px;background:var(--in);color:var(--tx);font-size:15px}
+          .big{width:100%;background:var(--ac);color:#fff;margin-top:12px}.sm{padding:8px 12px;font-size:13px;margin-top:6px}.bad{background:#c0392b}
+          details{background:var(--cd);border-radius:14px;padding:12px;margin-top:12px}summary{font-weight:600}
+          .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+          .card{background:var(--cd);border-radius:16px;padding:14px;margin-top:16px;text-align:center}
+          canvas{max-width:100%;border-radius:10px;margin:6px 0}
+          .row{display:flex;gap:8px;margin-top:10px}.row button{flex:1}.wrap{flex-wrap:wrap}
+          .err{color:#ff6b6b;min-height:1em}.mu{color:var(--mu)}
+          video{width:100%;border-radius:14px;background:#000;max-height:46vh}
+          .file{background:var(--in);border-radius:12px;padding:12px;text-align:center;color:var(--tx);margin-top:10px}.file input{display:none}
+          pre{white-space:pre-wrap;word-break:break-all;text-align:left;background:var(--bg);padding:10px;border-radius:10px;margin:8px 0}
+          .ok{color:#2ecc71}.warn{color:#f39c12}.bd{color:#ff5c5c}#rrisk,#rbody{text-align:left;line-height:1.6}
+          .tag{display:inline-block;background:var(--ac);color:#fff;border-radius:20px;padding:3px 12px;font-size:12px}
+          .chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0}.chips button{white-space:nowrap;padding:8px 12px;font-size:13px}.chips .on{background:var(--ac);color:#fff}
+          .it{display:flex;align-items:center;gap:6px;background:var(--cd);border-radius:12px;padding:10px;margin-top:8px}.it .tx{flex:1;word-break:break-all;font-size:14px}.it small{display:block;color:var(--mu)}
+          iframe{width:100%;height:300px;border:1px solid var(--bd);border-radius:10px;background:#fff;margin-top:10px}
+          nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--cd);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom)}
+          nav button{flex:1;background:none;border-radius:0;display:flex;flex-direction:column;align-items:center;font-size:20px;padding:8px 0;color:var(--mu)}nav span{font-size:11px}nav .on{color:var(--ac)}
+          #toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#000c;color:#fff;padding:10px 16px;border-radius:20px;opacity:0;transition:.3s;pointer-events:none;max-width:90%}#toast.show{opacity:1}
+          #bt .card{display:inline-block;margin:8px;width:45%}
+
+          EOF_1
+          cat > app/www/js/qr.js <<'EOF_2'
+          var QR=(function(){
+          var E=[[-1,7,10,15,20,26,18,20,24,30,18,20,24,26,30,22,24,28,30,28,28],[-1,10,16,26,18,24,16,18,22,22,26,30,22,22,24,24,28,28,26,26,26],[-1,13,22,18,26,18,24,18,22,20,24,28,26,24,20,30,24,28,28,26,30],[-1,17,28,22,16,22,28,26,26,24,28,24,28,22,24,24,30,28,28,26,28]];
+          var B=[[-1,1,1,1,1,1,2,2,2,2,4,4,4,4,4,6,6,6,6,7,8],[-1,1,1,1,2,2,4,4,4,5,5,5,8,9,9,10,10,11,13,14,16],[-1,1,1,2,2,4,4,6,6,8,8,8,10,12,16,12,17,16,18,21,20],[-1,1,1,2,4,4,4,5,6,8,8,11,11,16,16,18,16,19,21,25,25]];
+          var FB=[1,0,3,2];
+          function raw(v){var r=(16*v+128)*v+64;if(v>=2){var n=Math.floor(v/7)+2;r-=(25*n-10)*n-55;if(v>=7)r-=36}return r}
+          function cap(v,e){return Math.floor(raw(v)/8)-E[e][v]*B[e][v]}
+          function mul(x,y){var z=0;for(var i=7;i>=0;i--){z=(z<<1)^((z>>>7)*285);z^=((y>>>i)&1)*x}return z}
+          function div(n){var r=[];for(var i=0;i<n;i++)r.push(0);r[n-1]=1;var root=1;for(i=0;i<n;i++){for(var j=0;j<n;j++){r[j]=mul(r[j],root);if(j+1<n)r[j]^=r[j+1]}root=mul(root,2)}return r}
+          function rem(d,g){var r=g.map(function(){return 0});d.forEach(function(b){var f=b^r.shift();r.push(0);g.forEach(function(c,i){r[i]^=mul(c,f)})});return r}
+          function enc(text,e){
+          var by=Array.from(new TextEncoder().encode(text)),v=1;
+          for(;;v++){if(v>20)throw new Error("Metin çok uzun (en fazla ~600 karakter)");var cb=v<10?8:16;if(4+cb+by.length*8<=cap(v,e)*8)break}
+          var bits=[];function put(val,n){for(var i=n-1;i>=0;i--)bits.push((val>>>i)&1)}
+          put(4,4);put(by.length,v<10?8:16);by.forEach(function(b){put(b,8)});
+          var cb8=cap(v,e)*8;put(0,Math.min(4,cb8-bits.length));while(bits.length%8)bits.push(0);
+          for(var p=0xEC;bits.length<cb8;p^=0xEC^0x11)put(p,8);
+          var data=[];for(var i=0;i<bits.length;i+=8){var x=0;for(var k=0;k<8;k++)x=(x<<1)|bits[i+k];data.push(x)}
+          var nb=B[e][v],el=E[e][v],rc=Math.floor(raw(v)/8),ns=nb-rc%nb,sl=Math.floor(rc/nb),g=div(el),bl=[],q=0;
+          for(i=0;i<nb;i++){var d=data.slice(q,q+sl-el+(i<ns?0:1));q+=d.length;var ec=rem(d,g);if(i<ns)d.push(0);bl.push(d.concat(ec))}
+          var all=[];for(i=0;i<bl[0].length;i++)bl.forEach(function(b,j){if(i!=sl-el||j>=ns)all.push(b[i])});
+          return build(v,e,all)}
+          function build(v,e,cw){
+          var s=v*4+17,m=[],f=[];for(var y=0;y<s;y++){m.push(new Array(s).fill(false));f.push(new Array(s).fill(false))}
+          function set(x,y,d){m[y][x]=d;f[y][x]=true}
+          for(var i=0;i<s;i++){set(6,i,i%2==0);set(i,6,i%2==0)}
+          function fin(cx,cy){for(var dy=-4;dy<=4;dy++)for(var dx=-4;dx<=4;dx++){var d=Math.max(Math.abs(dx),Math.abs(dy)),x=cx+dx,y=cy+dy;if(x>=0&&x<s&&y>=0&&y<s)set(x,y,d!=2&&d!=4)}}
+          fin(3,3);fin(s-4,3);fin(3,s-4);
+          var na=v==1?0:Math.floor(v/7)+2,ap=[];
+          if(na){var st=v==32?26:Math.ceil((v*4+4)/(na*2-2))*2;ap=[6];for(var p=s-7;ap.length<na;p-=st)ap.splice(1,0,p)}
+          ap.forEach(function(a,i){ap.forEach(function(b,j){if((i==0&&j==0)||(i==0&&j==na-1)||(i==na-1&&j==0))return;for(var dy=-2;dy<=2;dy++)for(var dx=-2;dx<=2;dx++)set(a+dx,b+dy,Math.max(Math.abs(dx),Math.abs(dy))!=1)})});
+          function fmt(mask){var d=FB[e]<<3|mask,r=d;for(var i=0;i<10;i++)r=(r<<1)^((r>>>9)*0x537);var b=(d<<10|r)^0x5412;function g(i){return((b>>>i)&1)==1}
+          for(i=0;i<6;i++)set(8,i,g(i));set(8,7,g(6));set(8,8,g(7));set(7,8,g(8));for(i=9;i<15;i++)set(14-i,8,g(i));
+          for(i=0;i<8;i++)set(s-1-i,8,g(i));for(i=8;i<15;i++)set(8,s-15+i,g(i));set(8,s-8,true)}
+          fmt(0);
+          if(v>=7){var r=v;for(i=0;i<12;i++)r=(r<<1)^((r>>>11)*0x1F25);var vb=v<<12|r;for(i=0;i<18;i++){var bt=((vb>>>i)&1)==1,a=s-11+i%3,c=Math.floor(i/3);set(a,c,bt);set(c,a,bt)}}
+          var k=0;for(var rt=s-1;rt>=1;rt-=2){if(rt==6)rt=5;for(var vt=0;vt<s;vt++)for(var j=0;j<2;j++){var x=rt-j,up=((rt+1)&2)==0,y=up?s-1-vt:vt;if(!f[y][x]&&k<cw.length*8){m[y][x]=((cw[k>>>3]>>>(7-(k&7)))&1)==1;k++}}}
+          var M=[function(x,y){return(x+y)%2==0},function(x,y){return y%2==0},function(x,y){return x%3==0},function(x,y){return(x+y)%3==0},function(x,y){return(Math.floor(x/3)+Math.floor(y/2))%2==0},function(x,y){return x*y%2+x*y%3==0},function(x,y){return(x*y%2+x*y%3)%2==0},function(x,y){return((x+y)%2+x*y%3)%2==0}];
+          function ap2(n){for(var y=0;y<s;y++)for(var x=0;x<s;x++)if(!f[y][x]&&M[n](x,y))m[y][x]=!m[y][x]}
+          function pen(){var p=0;for(var a=0;a<2;a++)for(var i=0;i<s;i++){var run=1;for(var j=1;j<s;j++){var c=a?m[j][i]:m[i][j],d=a?m[j-1][i]:m[i][j-1];if(c==d){run++;if(run==5)p+=3;else if(run>5)p++}else run=1}}var dk=0;m.forEach(function(r){r.forEach(function(c){if(c)dk++})});return p+Math.floor(Math.abs(dk*20-s*s*10)/(s*s))*10}
+          var best=0,bp=1e9;for(var n=0;n<8;n++){ap2(n);fmt(n);var pp=pen();if(pp<bp){bp=pp;best=n}ap2(n)}
+          ap2(best);fmt(best);return m}
+          return{make:function(t,lvl){return enc(t,lvl==null?1:lvl)}}})();
+
+          EOF_2
+          cat > app/www/js/barcode.js <<'EOF_3'
+          var BC=(function(){
+          var L=["0001101","0011001","0010011","0111101","0100011","0110001","0101111","0111011","0110111","0001011"];
+          function R(c){return c.replace(/./g,function(x){return x=="0"?"1":"0"})}
+          function G(c){return R(c).split("").reverse().join("")}
+          var P=["LLLLLL","LLGLGG","LLGGLG","LLGGGL","LGLLGG","LGGLLG","LGGGLL","LGLGLG","LGLGGL","LGGLGL"];
+          function ck(d,w){var s=0;d.forEach(function(x,i){s+=x*w[i%2]});return(10-s%10)%10}
+          function ean(t){if(!/^\d{12,13}$/.test(t))throw new Error("EAN-13 için 12 veya 13 rakam gir");
+          var d=t.slice(0,12).split("").map(Number),c=ck(d,[1,3]);if(t.length==13&&+t[12]!=c)throw new Error("Kontrol hanesi hatalı, doğrusu: "+c);d.push(c);
+          var o="101",p=P[d[0]],i;for(i=1;i<7;i++)o+=p[i-1]=="L"?L[d[i]]:G(L[d[i]]);o+="01010";for(i=7;i<13;i++)o+=R(L[d[i]]);o+="101";return{bits:o,label:d.join("")}}
+          function ean8(t){if(!/^\d{7,8}$/.test(t))throw new Error("EAN-8 için 7 veya 8 rakam gir");
+          var d=t.slice(0,7).split("").map(Number),c=ck(d,[3,1]);if(t.length==8&&+t[7]!=c)throw new Error("Kontrol hanesi hatalı, doğrusu: "+c);d.push(c);
+          var o="101",i;for(i=0;i<4;i++)o+=L[d[i]];o+="01010";for(i=4;i<8;i++)o+=R(L[d[i]]);o+="101";return{bits:o,label:d.join("")}}
+          function upca(t){if(!/^\d{11,12}$/.test(t))throw new Error("UPC-A için 11 veya 12 rakam gir");var r=ean("0"+t);return{bits:r.bits,label:r.label.slice(1)}}
+          var C={"0":"nnnwwnwnn","1":"wnnwnnnnw","2":"nnwwnnnnw","3":"wnwwnnnnn","4":"nnnwwnnnw","5":"wnnwwnnnn","6":"nnwwwnnnn","7":"nnnwnnwnw","8":"wnnwnnwnn","9":"nnwwnnwnn","A":"wnnnnwnnw","B":"nnwnnwnnw","C":"wnwnnwnnn","D":"nnnnwwnnw","E":"wnnnwwnnn","F":"nnwnwwnnn","G":"nnnnnwwnw","H":"wnnnnwwnn","I":"nnwnnwwnn","J":"nnnnwwwnn","K":"wnnnnnnww","L":"nnwnnnnww","M":"wnwnnnnwn","N":"nnnnwnnww","O":"wnnnwnnwn","P":"nnwnwnnwn","Q":"nnnnnnwww","R":"wnnnnnwwn","S":"nnwnnnwwn","T":"nnnnwnwwn","U":"wwnnnnnnw","V":"nwwnnnnnw","W":"wwwnnnnnn","X":"nwnnwnnnw","Y":"wwnnwnnnn","Z":"nwwnwnnnn","-":"nwnnnnwnw",".":"wwnnnnwnn"," ":"nwwnnnwnn","*":"nwnnwnwnn"};
+          function c39(t){t=t.toUpperCase();if(!/^[0-9A-Z\-. ]+$/.test(t))throw new Error("Code 39: sadece A-Z, 0-9, -, ., boşluk");
+          var o="",s="*"+t+"*";for(var i=0;i<s.length;i++){var p=C[s[i]];for(var j=0;j<9;j++)o+=new Array((p[j]=="w"?3:1)+1).join(j%2?"0":"1");if(i<s.length-1)o+="0"}return{bits:o,label:t}}
+          var T="212222,222122,222221,121223,121322,131222,122213,122312,132212,221213,221312,231212,112232,122132,122231,113222,123122,123221,223211,221132,221231,213212,223112,312131,311222,321122,321221,312212,322112,322211,212123,212321,232121,111323,131123,131321,112313,132113,132311,211313,231113,231311,112133,112331,132131,113123,113321,133121,313121,211331,231131,213113,213311,213131,311123,311321,331121,312113,312311,332111,314111,221411,431111,111224,111422,121124,121421,141122,141221,112214,112412,122114,122411,142112,142211,241211,221114,413111,241112,134111,111242,121142,121241,114212,124112,124211,411212,421112,421211,212141,214121,412121,111143,111341,131141,114113,114311,411113,411311,113141,114131,311141,411131,211412,211214,211232,2331112".split(",");
+          function c128(t){if(!t||!/^[\x20-\x7E]+$/.test(t))throw new Error("Code 128: sadece ASCII karakterler");
+          var v=[104],s=104,i;for(i=0;i<t.length;i++){var c=t.charCodeAt(i)-32;v.push(c);s+=c*(i+1)}v.push(s%103);v.push(106);
+          var o="";v.forEach(function(x){var p=T[x];for(var j=0;j<p.length;j++)o+=new Array(+p[j]+1).join(j%2?"0":"1")});return{bits:o,label:t}}
+          function draw(cv,r,fg,bg){var u=3,h=110,q=14,w=r.bits.length*u+q*2;cv.width=w;cv.height=h+38;var x=cv.getContext("2d");x.fillStyle=bg||"#fff";x.fillRect(0,0,w,cv.height);x.fillStyle=fg||"#000";
+          for(var i=0;i<r.bits.length;i++)if(r.bits[i]=="1")x.fillRect(q+i*u,10,u,h);x.font="16px monospace";x.textAlign="center";x.fillText(r.label,w/2,h+30)}
+          return{ean:ean,ean8:ean8,upca:upca,c39:c39,c128:c128,draw:draw}})();
+
+          EOF_3
+          cat > app/www/js/app.js <<'EOF_4'
+          (function(){
+          var $=function(i){return document.getElementById(i)},LS=window.localStorage;
+          function ld(k,d){try{return JSON.parse(LS.getItem(k))||d}catch(e){return d}}
+          function sv(k,v){try{LS.setItem(k,JSON.stringify(v))}catch(e){}}
+          var S=Object.assign({wifi:true,beep:true,vib:true,save:true,light:false,prev:false,trust:""},ld("qrs",{}));
+          var H=ld("qrh",[]);
+          function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+          function toast(m){var t=$("toast");t.textContent=m;t.className="show";setTimeout(function(){t.className=""},2300)}
+          function fb(t){var a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();try{document.execCommand("copy");toast("Kopyalandı")}catch(e){}a.remove()}
+          function copy(t){if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(function(){toast("Kopyalandı")},function(){fb(t)});else fb(t)}
+          function tab(n){for(var i=1;i<=4;i++){$("p"+i).hidden=i!=n;$("t"+i).className=i==n?"on":""}if(n!=2)stop();if(n==3)list()}
+          [1,2,3,4].forEach(function(n){$("t"+n).onclick=function(){tab(n)}});
+          /* ---------- OLUŞTUR ---------- */
+          var F={text:[["v","Metin veya link","t"]],wifi:[["ssid","Ağ adı"],["pw","Şifre"],["enc","Şifreleme (WPA / WEP / nopass)","","WPA"]],mail:[["to","E-posta adresi"],["sub","Konu"],["body","Mesaj"]],tel:[["n","Telefon numarası"]],sms:[["n","Numara"],["m","Mesaj"]],wa:[["n","Numara (ülke koduyla, örn 905xx...)"],["m","Mesaj"]],geo:[["la","Enlem (örn 40.19)"],["lo","Boylam (örn 29.06)"]],vcard:[["nm","Ad Soyad"],["tl","Telefon"],["ml","E-posta"],["og","Şirket"]]};
+          function fields(){var h="";F[$("type").value].forEach(function(f){h+='<label>'+f[1]+'</label>'+(f[2]=="t"?'<textarea id="f_'+f[0]+'" rows="4"></textarea>':'<input id="f_'+f[0]+'" value="'+(f[3]||"")+'">')});$("fields").innerHTML=h}
+          $("type").onchange=fields;fields();
+          function g(i){return $("f_"+i).value.trim()}
+          function wesc(s){return s.replace(/([\\;,:"])/g,"\\$1")}
+          function payload(){var t=$("type").value;
+          if(t=="text")return g("v");
+          if(t=="wifi")return"WIFI:T:"+g("enc")+";S:"+wesc(g("ssid"))+";P:"+wesc(g("pw"))+";;";
+          if(t=="mail")return"mailto:"+g("to")+"?subject="+encodeURIComponent(g("sub"))+"&body="+encodeURIComponent(g("body"));
+          if(t=="tel")return"tel:"+g("n");
+          if(t=="sms")return"SMSTO:"+g("n")+":"+g("m");
+          if(t=="wa")return"https://wa.me/"+g("n").replace(/\D/g,"")+"?text="+encodeURIComponent(g("m"));
+          if(t=="geo")return"geo:"+g("la")+","+g("lo");
+          return"BEGIN:VCARD\nVERSION:3.0\nFN:"+g("nm")+"\nTEL:"+g("tl")+"\nEMAIL:"+g("ml")+"\nORG:"+g("og")+"\nEND:VCARD"}
+          var PRE=[["Klasik","#000000","#000000",0,"#000000"],["Mor","#5b2bd9","#c13cff",1,"#3a14a8"],["Okyanus","#0a4d8c","#00c2d1",1,"#073763"],["Gün batımı","#d7263d","#f6a800",1,"#8a1426"],["Orman","#14532d","#65a30d",1,"#0f3d22"]];
+          $("pre").innerHTML=PRE.map(function(p,i){return'<button data-i="'+i+'">'+p[0]+'</button>'}).join("");
+          $("pre").onclick=function(e){var i=e.target.dataset.i;if(i==null)return;var p=PRE[i];$("fg").value=p[1];$("fg2").value=p[2];$("grad").checked=!!p[3];$("ec").value=p[4];$("bg").value="#ffffff";$("shape").value=p[3]?"2":"0";$("eye").value=p[3]?"1":"0"};
+          var LOGO=null;
+          $("logo").onchange=function(e){var f=e.target.files[0];if(!f)return;var r=new FileReader();r.onload=function(){var im=new Image();im.onload=function(){LOGO=im;toast("Logo eklendi")};im.src=r.result};r.readAsDataURL(f)};
+          $("nologo").onclick=function(){LOGO=null;$("logo").value="";toast("Logo kaldırıldı")};
+          $("ls").oninput=function(){$("lsv").textContent=$("ls").value};
+          function opts(){return{fg:$("fg").value,fg2:$("fg2").value,grad:$("grad").checked,bg:$("bg").value,ec:$("ec").value,shape:+$("shape").value,eye:+$("eye").value,logo:LOGO,ls:+$("ls").value,cap:$("cap").value.trim()}}
+          function rr(x,X,Y,w,h,r){x.beginPath();x.moveTo(X+r,Y);x.arcTo(X+w,Y,X+w,Y+h,r);x.arcTo(X+w,Y+h,X,Y+h,r);x.arcTo(X,Y+h,X,Y,r);x.arcTo(X,Y,X+w,Y,r);x.closePath()}
+          function sh(x,X,Y,s,st){if(st==2){x.beginPath();x.arc(X+s/2,Y+s/2,s/2,0,7);x.closePath()}else if(st==1)rr(x,X,Y,s,s,s*.3);else{x.beginPath();x.rect(X,Y,s,s)}x.fill()}
+          function drawQR(cv,m,o){var n=m.length,u=Math.max(6,Math.floor(360/n)),q=3*u,sz=n*u+2*q,cp=o.cap?46:0;cv.width=sz;cv.height=sz+cp;var x=cv.getContext("2d");
+          x.fillStyle=o.bg;x.fillRect(0,0,cv.width,cv.height);
+          var fs=o.fg;if(o.grad){fs=x.createLinearGradient(q,q,sz-q,sz-q);fs.addColorStop(0,o.fg);fs.addColorStop(1,o.fg2)}
+          x.fillStyle=fs;
+          for(var y=0;y<n;y++)for(var i=0;i<n;i++){if(!m[y][i])continue;if((y<7&&i<7)||(y<7&&i>=n-7)||(y>=n-7&&i<7))continue;var X=q+i*u,Y=q+y*u;
+          if(o.shape==1){x.beginPath();x.arc(X+u/2,Y+u/2,u*.46,0,7);x.fill()}
+          else if(o.shape==2){rr(x,X+.5,Y+.5,u-1,u-1,u*.3);x.fill()}
+          else if(o.shape==3){x.beginPath();x.moveTo(X+u/2,Y);x.lineTo(X+u,Y+u/2);x.lineTo(X+u/2,Y+u);x.lineTo(X,Y+u/2);x.closePath();x.fill()}
+          else x.fillRect(X,Y,u+.5,u+.5)}
+          [[0,0],[n-7,0],[0,n-7]].forEach(function(p){var X=q+p[0]*u,Y=q+p[1]*u;x.fillStyle=o.ec;sh(x,X,Y,7*u,o.eye);x.fillStyle=o.bg;sh(x,X+u,Y+u,5*u,o.eye);x.fillStyle=o.ec;sh(x,X+2*u,Y+2*u,3*u,o.eye)});
+          if(o.logo){var L=Math.floor(sz*o.ls/100),b=L+u*1.5,c=sz/2;x.fillStyle=o.bg;rr(x,c-b/2,c-b/2,b,b,u*1.2);x.fill();var k=Math.min(L/o.logo.width,L/o.logo.height),w=o.logo.width*k,h=o.logo.height*k;x.drawImage(o.logo,c-w/2,c-h/2,w,h)}
+          if(o.cap){x.fillStyle=o.fg;x.font="bold 22px sans-serif";x.textAlign="center";x.fillText(o.cap,sz/2,sz+cp-14)}}
+          function lum(h){var v=[1,3,5].map(function(i){return parseInt(h.substr(i,2),16)});return .299*v[0]+.587*v[1]+.114*v[2]}
+          function make(p,cv){var f=$("fmt").value,o=opts();
+          if(f=="qr"){if(lum(o.fg)>=lum(o.bg))toast("Uyarı: açık renk koyu zeminde taranmayabilir");var e=$("ecl").value=="a"?(o.logo?3:1):+$("ecl").value;drawQR(cv,QR.make(p,e),o)}
+          else{var r=f=="ean"?BC.ean(p):f=="ean8"?BC.ean8(p):f=="upc"?BC.upca(p):f=="c39"?BC.c39(p):BC.c128(p);BC.draw(cv,r,o.fg,o.bg)}}
+          var CUR=null;
+          function share(cv){var d=cv.toDataURL("image/png"),sc=window.plugins&&window.plugins.socialsharing;if(sc)sc.shareWithOptions({files:[d],subject:"Kod"},function(){},function(){toast("Paylaşılamadı")});else{var a=document.createElement("a");a.href=d;a.download="kod.png";document.body.appendChild(a);a.click();a.remove()}}
+          $("gen").onclick=function(){$("err").textContent="";$("bt").innerHTML="";try{
+          if($("batch").checked&&$("type").value=="text"){var ls=g("v").split("\n").map(function(s){return s.trim()}).filter(Boolean);if(!ls.length)throw new Error("Önce içerik gir");$("out").hidden=true;
+          ls.slice(0,30).forEach(function(l){var d=document.createElement("div");d.className="card";var c=document.createElement("canvas");make(l,c);var b=document.createElement("button");b.textContent="Paylaş";b.onclick=function(){share(c)};d.appendChild(c);d.appendChild(b);$("bt").appendChild(d)});return}
+          var p=payload();if(!p)throw new Error("Önce içerik gir");make(p,$("cv"));CUR={t:p,g:$("fmt").value};$("out").hidden=false}catch(e){$("err").textContent=e.message;$("out").hidden=true}};
+          $("sh").onclick=function(){share($("cv"))};
+          $("sv").onclick=function(){if(CUR){add(CUR.t,"Oluşturduklarım",CUR.g);toast("Kaydedildi")}};
+          /* ---------- KLASÖR ---------- */
+          function add(t,f,g){var e=H.filter(function(h){return h.t==t&&h.f==f})[0];if(e)e.ts=Date.now();else H.unshift({id:String(Date.now()*1000+Math.floor(Math.random()*1000)),t:t,f:f,ts:Date.now(),fav:0,g:g||""});if(H.length>500)H.length=500;sv("qrh",H)}
+          function kind(t){if(/^WIFI:/i.test(t))return"wifi";if(/^https?:\/\//i.test(t))return"url";if(/^BEGIN:VCARD/i.test(t))return"vcard";if(/^mailto:/i.test(t))return"mail";if(/^tel:/i.test(t))return"tel";if(/^sms(to)?:/i.test(t))return"sms";if(/^geo:/i.test(t))return"geo";return"text"}
+          var FO={url:"Linkler",wifi:"Wi-Fi",text:"Metinler",vcard:"Kişiler",mail:"Diğer",tel:"Diğer",sms:"Diğer",geo:"Diğer"};
+          var LB={url:"🔗 Link",wifi:"📶 Wi-Fi",text:"📝 Metin",vcard:"👤 Kişi",mail:"✉️ E-posta",tel:"📞 Telefon",sms:"💬 SMS",geo:"📍 Konum"};
+          function pw(t){var o={};(t.slice(5).match(/(?:[^;\\]|\\.)+/g)||[]).forEach(function(s){o[s[0].toUpperCase()]=s.slice(2).replace(/\\(.)/g,"$1")});return o}
+          function disp(t){return kind(t)=="wifi"?"📶 "+(pw(t).S||"Wi-Fi"):t}
+          var FOL=["Tümü","Linkler","Wi-Fi","Metinler","Kişiler","Diğer","Oluşturduklarım","★ Favoriler"],cf="Tümü";
+          function list(){var q=$("q").value.toLowerCase();$("chips").innerHTML=FOL.map(function(f){return'<button data-f="'+f+'" class="'+(f==cf?"on":"")+'">'+f+'</button>'}).join("");
+          var a=H.filter(function(h){return(cf=="Tümü"||(cf=="★ Favoriler"?h.fav:h.f==cf))&&disp(h.t).toLowerCase().indexOf(q)>-1});
+          $("lst").innerHTML=a.length?a.map(function(h){return'<div class="it" data-id="'+h.id+'"><div class="tx" data-a="o">'+esc(disp(h.t).slice(0,90))+'<small>'+h.f+' · '+new Date(h.ts).toLocaleDateString("tr-TR")+'</small></div><button data-a="f">'+(h.fav?"★":"☆")+'</button><button data-a="d">🗑</button></div>'}).join(""):'<p class="mu">Burada henüz bir şey yok</p>'}
+          $("q").oninput=list;
+          $("chips").onclick=function(e){if(e.target.dataset.f){cf=e.target.dataset.f;list()}};
+          $("lst").onclick=function(e){var b=e.target.closest("[data-a]");if(!b)return;var id=b.closest(".it").dataset.id,h=H.filter(function(x){return x.id==id})[0];if(!h)return;var a=b.dataset.a;
+          if(a=="f"){h.fav=h.fav?0:1}else if(a=="d"){H=H.filter(function(x){return x.id!=id})}
+          else{if(h.f=="Oluşturduklarım"){tab(1);$("type").value="text";fields();$("f_v").value=h.t;$("fmt").value=h.g||"qr";$("gen").click()}else{tab(2);show(h.t)}return}
+          sv("qrh",H);list()};
+          $("exp").onclick=function(){var t=H.map(function(h){return h.f+": "+h.t}).join("\n"),sc=window.plugins&&window.plugins.socialsharing;if(sc)sc.share(t);else copy(t)};
+          /* ---------- TARA ---------- */
+          var stream=null,det=null,run=false,busy=false,last="",lt=0,tor=0,vid=$("vid"),cvs=document.createElement("canvas");
+          if("BarcodeDetector" in window){try{det=new BarcodeDetector()}catch(e){}}
+          function err(m){$("serr").textContent=m}
+          function stop(){run=false;if(stream){stream.getTracks().forEach(function(t){t.stop()});stream=null}tor=0}
+          function decode(src,w,h){var p=det?det.detect(src).then(function(r){return r.length?r[0].rawValue:null}).catch(function(){return null}):Promise.resolve(null);
+          return p.then(function(v){if(v||!window.jsQR)return v;var s=Math.min(1,640/w);cvs.width=w*s|0;cvs.height=h*s|0;var x=cvs.getContext("2d");x.drawImage(src,0,0,cvs.width,cvs.height);var d=x.getImageData(0,0,cvs.width,cvs.height),r=jsQR(d.data,d.width,d.height);return r?r.data:null})}
+          function caps(){var t=stream&&stream.getVideoTracks()[0],c=t&&t.getCapabilities?t.getCapabilities():{};$("tor").hidden=!c.torch;if(c.zoom){var z=$("zm");z.hidden=false;z.min=c.zoom.min;z.max=c.zoom.max;z.step=c.zoom.step||.1;z.value=c.zoom.min}else $("zm").hidden=true}
+          function go(){navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}}).then(function(s){stream=s;vid.srcObject=s;return vid.play()}).then(function(){run=true;caps();loop()}).catch(function(e){err("Kamera açılamadı: "+e.message+" (Galeriden okumayı dene)")})}
+          $("cam").onclick=function(){err("");stop();var P=window.cordova&&cordova.plugins&&cordova.plugins.permissions;if(P)P.requestPermission(P.CAMERA,function(s){if(s.hasPermission)go();else err("Kamera izni verilmedi")},function(){err("Kamera izni alınamadı")});else go()};
+          $("tor").onclick=function(){tor=tor?0:1;var t=stream&&stream.getVideoTracks()[0];if(t)t.applyConstraints({advanced:[{torch:!!tor}]}).catch(function(){})};
+          $("zm").oninput=function(){var t=stream&&stream.getVideoTracks()[0];if(t)t.applyConstraints({advanced:[{zoom:+$("zm").value}]}).catch(function(){})};
+          function loop(){if(!run)return;if(vid.videoWidth&&!busy){busy=true;decode(vid,vid.videoWidth,vid.videoHeight).then(function(t){busy=false;if(t)onScan(t)}).catch(function(e){busy=false})}setTimeout(loop,250)}
+          $("img").onchange=function(e){var f=e.target.files[0];if(!f)return;err("");createImageBitmap(f).then(function(b){return decode(b,b.width,b.height)}).then(function(t){if(t)onScan(t,1);else err("Kod bulunamadı")}).catch(function(e){err(e.message)})};
+          function beep(){try{var a=new(window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator();o.frequency.value=880;o.connect(a.destination);o.start();setTimeout(function(){o.stop();a.close()},120)}catch(e){}}
+          function onScan(t,force){var n=Date.now();if(!force&&t==last&&n-lt<4000){lt=n;return}last=t;lt=n;
+          if(S.beep)beep();if(S.vib&&navigator.vibrate)navigator.vibrate(80);
+          var k=kind(t);if(S.save)add(t,FO[k]);show(t);if(k=="wifi"&&S.wifi)connect(pw(t));if(k=="url"&&S.prev)preview(t)}
+          var CS="";
+          function show(t){CS=t;var k=kind(t),w=k=="wifi"?pw(t):null,b="",a="";$("res").hidden=false;$("pv").innerHTML="";$("rk").textContent=LB[k];
+          if(w){b='<div>Ağ: <b>'+esc(w.S||"?")+'</b></div><div>Şifre: <span id="pwv">'+(w.P?"••••••••":"yok")+'</span></div>';a='<button data-a="conn">Bağlan</button><button data-a="rev">Şifreyi göster</button><button data-a="cp">Şifreyi kopyala</button>'}
+          else{b='<pre>'+esc(t)+'</pre>';a=k=="url"?'<button data-a="prev">Güvenli ön izleme</button><button data-a="open">Siteyi aç</button><button data-a="trust">Güvenilir yap</button><button data-a="cp">Kopyala</button>':(k=="mail"||k=="tel"||k=="sms"||k=="geo")?'<button data-a="open">Aç</button><button data-a="cp">Kopyala</button>':'<button data-a="cp">Kopyala</button>'}
+          $("rbody").innerHTML=b;$("acts").innerHTML=a;$("rrisk").innerHTML=k=="url"?risk(t):'<div class="warn">⚠ Otomatik açılmadı, sadece gösterildi.</div>'}
+          function trusted(h){return S.trust.split("\n").map(function(s){return s.trim().toLowerCase()}).filter(Boolean).some(function(d){return h==d||h.slice(-d.length-1)=="."+d})}
+          var HOST="";
+          function risk(t){var u;try{u=new URL(t)}catch(e){return'<div class="bd">✖ Geçersiz link</div>'}var h=u.hostname.toLowerCase(),r=[];HOST=h;
+          r.push(['Alan adı: <b>'+esc(h)+'</b>','ok']);
+          if(trusted(h))r.push(['Güvendiğin siteler listesinde','ok']);
+          r.push(u.protocol=="https:"?['HTTPS (şifreli bağlantı)','ok']:['HTTP: şifresiz, güvenli değil','bd']);
+          if(/^\d+\.\d+\.\d+\.\d+$/.test(h))r.push(['IP adresi ile link, şüpheli','bd']);
+          if(/xn--/.test(h))r.push(['Taklit karakterli alan adı olabilir','bd']);
+          if(u.username||u.password||t.indexOf("@")>-1)r.push(['Link içinde @ veya kullanıcı bilgisi var','bd']);
+          if(/^(bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd|cutt\.ly|rb\.gy|ow\.ly|shorturl\.at)$/.test(h))r.push(['Kısaltılmış link, gerçek adres gizli','warn']);
+          if(h.split(".").length>4)r.push(['Çok fazla alt alan adı','warn']);
+          if(/(login|signin|verify|secure|account|odeme|payment|wallet)/i.test(h))r.push(['Alan adı giriş/ödeme gibi hassas kelime içeriyor','warn']);
+          if(/\.(zip|apk|exe|scr|bat|msi)$/i.test(u.pathname))r.push(['Dosya indirme linki olabilir','bd']);
+          if(t.length>200)r.push(['Çok uzun link','warn']);
+          return r.map(function(x){return'<div class="'+x[1]+'">'+(x[1]=="ok"?"✔ ":x[1]=="warn"?"⚠ ":"✖ ")+x[0]+'</div>'}).join("")}
+          function preview(t){$("pv").innerHTML='<iframe sandbox="" referrerpolicy="no-referrer" src="'+esc(t)+'"></iframe><small class="mu">Ön izleme: betik, form ve yönlendirme kapalı. Boş görünürse site izin vermiyor.</small>'}
+          function ext(u){if(/^smsto:/i.test(u)){var p=u.slice(6).split(":");u="sms:"+p[0]+"?body="+encodeURIComponent(p.slice(1).join(":"))}
+          if(confirm("Açılsın mı?\n\n"+u)){if(window.cordova&&cordova.InAppBrowser)cordova.InAppBrowser.open(u,"_system");else window.open(u,"_blank")}}
+          function connect(w){if(!w.S)return;if(!window.WifiWizard2){toast("Wi-Fi eklentisi yok, şifreyi kopyala");return}
+          var al=/^(WPA|SAE)/i.test(w.T||"")?"WPA":/^WEP/i.test(w.T||"")?"WEP":"NONE";toast("Bağlanılıyor: "+w.S);
+          WifiWizard2.connect(w.S,true,w.P||"",al,w.H=="true").then(function(){toast("Bağlandı: "+w.S)}).catch(function(){toast("Bağlanamadı, şifreyi kontrol et")})}
+          $("acts").onclick=function(e){var a=e.target.dataset.a,k=kind(CS);if(!a)return;
+          if(a=="cp")copy(k=="wifi"?pw(CS).P||"":CS);
+          else if(a=="prev"){if(confirm("Ön izleme siteye bağlanır (IP adresin görünür). Devam?"))preview(CS)}
+          else if(a=="open")ext(CS);
+          else if(a=="trust"&&HOST){S.trust+=(S.trust?"\n":"")+HOST;sv("qrs",S);$("s_trust").value=S.trust;show(CS);toast("Güvenilir listeye eklendi")}
+          else if(a=="conn")connect(pw(CS));
+          else if(a=="rev"){$("pwv").textContent=pw(CS).P||"yok"}};
+          /* ---------- AYARLAR ---------- */
+          function theme(){document.body.className=S.light?"light":""}
+          ["wifi","save","prev","beep","vib","light"].forEach(function(k){var c=$("s_"+k);c.checked=!!S[k];c.onchange=function(){S[k]=c.checked;sv("qrs",S);theme()}});
+          $("s_trust").value=S.trust;$("s_trust").onchange=function(){S.trust=$("s_trust").value;sv("qrs",S)};
+          $("s_clr").onclick=function(){if(confirm("Geçmiş ve ayarlar silinsin mi?")){try{LS.clear()}catch(e){}H=[];toast("Silindi");location.reload()}};
+          theme();
+          })();
+
+          EOF_4
+
+      - name: Taramayı güçlendir (jsQR) ve ikon üret
+        run: |
+          npm install --prefix /tmp/jq jsqr@1.4.0
+          cp /tmp/jq/node_modules/jsqr/dist/jsQR.js app/www/js/jsQR.js
+          cd app
+          python3 - <<'PY'
+          import zlib,struct
+          n=512
+          bg=(18,16,28);c=(124,77,255)
+          px=[[bg]*n for _ in range(n)]
+          def sq(x,y,s,col):
+              for i in range(s):
+                  for j in range(s): px[y+i][x+j]=col
+          def eye(x,y,s):
+              sq(x,y,s,c);sq(x+s//7,y+s//7,s*5//7,bg);sq(x+s*2//7,y+s*2//7,s*3//7,c)
+          s=n*3//10;m=n//8
+          eye(m*2,m*2,s);eye(n-m*2-s,m*2,s);eye(m*2,n-m*2-s,s)
+          for k in range(6):
+              for l in range(6):
+                  if (k*7+l*3)%3: sq(n//2+k*n//16,n//2+l*n//16,n//20,c)
+          raw=b''.join(b'\x00'+bytes(v for p in r for v in p) for r in px)
+          def ch(t,d):
+              b=t+d;return struct.pack('>I',len(d))+b+struct.pack('>I',zlib.crc32(b)&0xffffffff)
+          open('res/icon.png','wb').write(b'\x89PNG\r\n\x1a\n'+ch(b'IHDR',struct.pack('>IIBBBBB',n,n,8,2,0,0,0))+ch(b'IDAT',zlib.compress(raw))+ch(b'IEND',b''))
+          PY
+          if [ -f ../icon.png ]; then cp ../icon.png res/icon.png; fi
+          cp res/icon.png www/img/icon.png
+
+      - name: config.xml yaz
+        run: |
+          cat > app/config.xml <<EOF_CFG
+          <?xml version='1.0' encoding='utf-8'?>
+          <widget id="com.jjj.qrguvenli" version="1.1.${GITHUB_RUN_NUMBER}" android-versionCode="${GITHUB_RUN_NUMBER}" xmlns="http://www.w3.org/ns/widgets" xmlns:android="http://schemas.android.com/apk/res/android">
+              <name>QR Güvenli</name>
+              <description>QR kod ve barkod üretici + güvenli okuyucu</description>
+              <author email="a@b.c">Jjj</author>
+              <content src="index.html" />
+              <access origin="*" launch-external="yes" />
+              <allow-navigation href="about:blank" />
+              <preference name="Orientation" value="portrait" />
+              <preference name="android-minSdkVersion" value="24" />
+              <preference name="android-targetSdkVersion" value="33" />
+              <preference name="AndroidXEnabled" value="true" />
+              <platform name="android">
+                  <icon src="res/icon.png" density="mdpi" />
+                  <icon src="res/icon.png" density="hdpi" />
+                  <icon src="res/icon.png" density="xhdpi" />
+                  <icon src="res/icon.png" density="xxhdpi" />
+                  <icon src="res/icon.png" density="xxxhdpi" />
+                  <config-file target="AndroidManifest.xml" parent="/manifest">
+                      <uses-permission android:name="android.permission.CAMERA" />
+                      <uses-permission android:name="android.permission.VIBRATE" />
+                      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+                      <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+                      <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+                      <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+                      <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+                  </config-file>
+              </platform>
+          </widget>
+          EOF_CFG
+
+      - name: Android platformu ve eklentiler
+        working-directory: app
+        run: |
+          cordova platform add android@12.0.1
+          cordova plugin add cordova-plugin-android-permissions || echo "izin eklentisi eklenemedi"
+          cordova plugin add cordova-plugin-wifiwizard2 || echo "wifi eklentisi eklenemedi"
+          cordova plugin add cordova-plugin-x-socialsharing || echo "paylaşım eklentisi eklenemedi"
+          cordova plugin add cordova-plugin-inappbrowser || echo "tarayıcı eklentisi eklenemedi"
+
+      - name: İmza anahtarını önbellekten al
+        uses: actions/cache@v4
+        with:
+          path: qr.keystore
+          key: qr-keystore-v1
+
+      - name: İmza anahtarı oluştur
+        run: |
+          [ -f qr.keystore ] || keytool -genkeypair -keystore qr.keystore -alias qr -keyalg RSA -keysize 2048 -validity 10000 -storepass qrguvenli -keypass qrguvenli -dname "CN=QR Guvenli"
+          cat > app/build.json <<EOF_BJ
+          {"android":{"release":{"keystore":"$GITHUB_WORKSPACE/qr.keystore","storePassword":"qrguvenli","alias":"qr","password":"qrguvenli","packageType":"apk"}}}
+          EOF_BJ
+
+      - name: APK derle (debug + imzalı release)
+        working-directory: app
+        run: |
+          cordova build android --debug
+          cordova build android --release --buildConfig=build.json || echo "release derlenemedi, debug APK kullan"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QR-Guvenli-APK
+          path: app/platforms/android/app/build/outputs/apk/**/*.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: QR Güvenli v${{ github.run_number }}
+          files: app/platforms/android/app/build/outputs/apk/**/*.apk
